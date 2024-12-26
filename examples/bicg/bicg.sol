@@ -18,7 +18,7 @@ sub main()
 	int n = 0;
 	int nnz = 0;
 	int blockn = 0;
-	int nb = 22;
+	int nb = 2;
 
 	init_params(nb, n, nnz, blockn);
 	init_mat_desc(nb);

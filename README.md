@@ -32,6 +32,22 @@ The following dependencies should be pr-installed:
 
 The CSR-based examples should also be linked to IntelMKL Sparse BLAS library.
 
+## Prepare input matrices for sparse linear algebra examples (csr/ and bicg/)
+
+Repeating the performance tests requires prepairing the input matrices. The easiest way 
+to prepare a proper CSR matrix is to download .mtx file from [Suite Sparse Matrix Collection] (https://sparse.tamu.edu/). The .mtx file can be converted to the binary 
+format using PETSc-based matrices converter which can be found in `/converter` directory. To build 
+the converter execute the following command (PETSc library is required):
+`<c++ compiler> -I<path-to-petsc>/include -L<path-to-petsc>lib mmio.c mtx_to_csr.cpp -O3 -lpetsc -o converter`
+
+The matrix can be converterted using the following command:
+
+`./converter -fin <path-to-mtx-file> -fout <path-to-output-file>`
+
+The binary matrix file can then be fed into the input of the compiled ParSolGen example:
+
+`./parsolgen-example-binary> <path-to-binary-matrix-file>`
+
 ## Future plans
 
-Distributed BiCG solver example is comming soon.
+Stencil-based numerical alogrihtms class support is coming soon.
