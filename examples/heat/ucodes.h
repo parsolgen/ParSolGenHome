@@ -4,8 +4,10 @@
 #include <fstream>
 #include <mpi.h>
 #include <cassert>
+#include <goopax>
 
 double t = 0;
+double total_exec_time = 0;
 
 class MeasurementPoint final
 {
@@ -17,6 +19,24 @@ public:
 	~MeasurementPoint()
 	{
 		t += (MPI_Wtime() - time_);
+	}
+
+private:
+	double time_ = 0;
+};
+
+double goopax_time = 0.;
+
+class MeasurementPointGoopax final
+{
+public:
+	MeasurementPointGoopax()
+	{
+		time_ = MPI_Wtime();
+	}
+	~MeasurementPointGoopax()
+	{
+		goopax_time += (MPI_Wtime() - time_);
 	}
 
 private:
@@ -113,12 +133,69 @@ void calc_main(
 	}
 }
 
+void calc_main_goopax(
+	goopax::goopax_device dev,
+	int in_n,
+	int in_m,
+	double a,
+	double dt,
+	double dx,
+	double dy,
+	const goopax::buffer<double>& prev,
+	goopax::buffer<double>& curr)
+{
+	static constexpr const auto n_gpu_threads = 32;
+
+	const auto n = in_n + 2;
+	const auto m = in_m + 2;
+	const auto dx2 = dx * dx;
+	const auto dy2 = dy * dy;
+	const auto nthreads = (n * m / n_gpu_threads + 1) * n_gpu_threads;
+
+	MeasurementPointGoopax p1{};
+
+	static goopax::kernel krnl(dev, [n, m, in_n, in_m, dx2, dy2, a, dt](
+		const goopax::resource<double>& prev,
+		goopax::resource<double>& curr)
+	{
+		const auto g_i = static_cast<goopax::gpu_int>(goopax::global_id());
+		const auto i = g_i / n;
+		const auto j = g_i % m;
+
+		gpu_if(g_i < m)
+		{
+			curr[g_i] = prev[g_i];
+			curr[(n - 1) * m + g_i] = prev[(n - 1) * m + g_i];
+		}
+		gpu_if(g_i < n)
+		{
+			curr[g_i * m] = prev[g_i * m];
+			curr[g_i * m + m -1] = prev[g_i * m + m -1];
+		}
+		gpu_if(i >= 1 && i <= in_n)
+		{
+			gpu_if(j >= 1 && j <= in_m)
+			{
+				const auto ind = i * m + j;
+				const auto ip = (i + 1) * m + j;
+				const auto im = (i - 1) * m + j;
+				const auto jp = i * m + j + 1;
+				const auto jm = i * m + j - 1;
+				curr[ind] = prev[ind] + a * dt *
+			    	((prev[ip] - 2.0 * prev[ind] + prev[im]) / dx2 +
+			    	(prev[jp] - 2.0 * prev[ind] + prev[jm]) / dy2);
+			}
+		}
+	}, 0, nthreads);
+	krnl(prev, curr).wait();
+}
+
 void print(double val)
 {
 	std::cout << "V = " << val << "\n";
 }
 
-void read_ghost(int in_n, int in_m, int ghost_edge_len, const double* a, auto* ghost_edge)
+void read_ghost(int in_n, int in_m, int ghost_edge_len, const double* a, double* ghost_edge)
 {
 	MeasurementPoint p1{};
 
@@ -150,6 +227,53 @@ void read_ghost(int in_n, int in_m, int ghost_edge_len, const double* a, auto* g
 		assert(j < ghost_edge_len);
 		ghost_edge[g_i] = a[(n - 2) * m + j];
 	}
+}
+
+void read_ghost_goopax(
+	goopax::goopax_device dev,
+	int in_n,
+	int in_m,
+	int ghost_edge_len,
+	const goopax::buffer<double>& a,
+	goopax::buffer<double>& ghost_edge)
+{
+	const auto n_gpu_threads = (in_n / 32 + 1) * 32;
+
+	const auto n = in_n + 2;
+	const auto m = in_m + 2;
+
+	MeasurementPointGoopax p1{};
+
+	static goopax::kernel krnl(dev, [n, m, in_n, in_m, ghost_edge_len](
+		const goopax::resource<double>& a,
+		goopax::resource<double>& ghost_edge)
+	{
+		const auto i = static_cast<goopax::gpu_int>(goopax::global_id());
+		gpu_if(i >= 1 && i <= in_n)
+		{
+			//assert(i < ghost_edge_len);
+			ghost_edge[i - 1] = a[i * m + 1];
+		}
+		// RIGHT
+		gpu_if(i >= 1 && i <= in_n)
+		{
+			//assert(i < ghost_edge_len);
+			ghost_edge[i + in_n - 1] = a[i * m + m - 2];
+		}
+		// UP
+		gpu_if(i >= 1 && i <= in_m)
+		{
+			//assert(j < ghost_edge_len);
+			ghost_edge[2 * in_n + i - 1] = a[m + i];
+		}
+		// DOWN
+		gpu_if(i >= 1 && i <= in_m)
+		{
+			//assert(j < ghost_edge_len);
+			ghost_edge[2 * in_n + in_m + i - 1] = a[(n - 2) * m + i];
+		}
+	}, 0, n_gpu_threads);
+	krnl(a, ghost_edge).wait();
 }
 
 void write_ghost(
@@ -198,6 +322,67 @@ void write_ghost(
 	}
 }
 
+void write_ghost_goopax(
+	goopax::goopax_device dev,
+	int in_n,
+	int in_m,
+	int ghost_edge_len,
+	const goopax::buffer<double>& left,
+	const goopax::buffer<double>& right,
+	const goopax::buffer<double>& up,
+	const goopax::buffer<double>& down,
+	const goopax::buffer<double>& a,
+	goopax::buffer<double>& b)
+{
+	const auto n_gpu_threads = (in_n / 32 + 1) * 32;
+
+	const auto n = in_n + 2;
+	const auto m = in_m + 2;
+
+	MeasurementPointGoopax p1{};
+
+	static goopax::kernel krnl(dev, [n, m, in_n, in_m, ghost_edge_len](
+		const goopax::resource<double>& left,
+		const goopax::resource<double>& right,
+		const goopax::resource<double>& up,
+		const goopax::resource<double>& down,
+		const goopax::resource<double>& a,
+		goopax::resource<double>& b)
+	{
+		const auto i = static_cast<goopax::gpu_int>(goopax::global_id());
+		// LEFT
+		gpu_if (i < in_n)
+		{
+			// right -> left
+			b[(i + 1) * m] = left[in_n + i];
+		}
+		// RIGHT
+		gpu_if (i < in_n)
+		{
+			// left -> right
+			b[(i + 1) * m + m - 1] = right[i];
+		}
+		// UP
+		gpu_if (i < in_m)
+		{
+			// down -> up
+			b[i + 1] = up[2 * in_n + in_m + i];
+		}
+		// DOWN
+		gpu_if (i < in_m)
+		{
+			// up -> down
+			b[(n - 1) * m + i + 1] = down[2 * in_n + i];
+		}
+		gpu_if (i >= 1 && i < in_n + 1) {
+			goopax::gpu_for (1, in_m + 1, [m, i, &a, &b](goopax::gpu_int j) {
+				b[i * m + j]  = a[i * m + j];
+			});
+		}
+	}, 0, n_gpu_threads);
+	krnl(left, right, up, down, a, b).wait();
+}
+
 void print_iter(int iter)
 {
 	if (iter % 100 == 0)
@@ -208,6 +393,12 @@ void print_iter(int iter)
 
 void print_time()
 {
-	std::cout << "Calculation time: " << t << "\n";
+	std::cout << "Total time taken: " << MPI_Wtime() - total_exec_time
+		<< "\nCPU kernels took: " << t
+		<< "\nGoopax kernels took: " << goopax_time << "\n";
 }
 
+void time_start()
+{
+	total_exec_time = MPI_Wtime();
+}

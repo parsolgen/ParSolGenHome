@@ -1,5 +1,6 @@
 import init_el(in int ii, in int jj, in int n, in int m, in int nb, in int mb, out Array<double> a[n][m]);
-import read_ghost(in int n, in int m, in int ghost_edge_len, in Array<double> a[n][m], out Array<double> ghost_edge[ghost_edge_len][1]);
+import read_ghost(in int n, in int m, in int ghost_edge_len,
+	in Array<double> a[n][m], out Array<double> ghost_edge[ghost_edge_len][1]) : @goopax;
 import write_ghost(in int n,
 	in int m,
 	in int ghost_edge_len,
@@ -19,9 +20,10 @@ import calc_main(
 	in double dx,
 	in double dy,
 	in Array<double> A[n][m],
-	out Array<double> B[n][m]);
+	out Array<double> B[n][m]) : @goopax;
 import print_iter(in int iter);
 import print_time();
+import time_start();
 
 export sub main()
 {
@@ -50,14 +52,16 @@ export sub main()
 		}
 	}
 
-	while (it < 5000)
+	time_start();
+
+	while (it < 4000)
 	{
 		for (int i = 0; i < nb; i++)
 		{
 			for (int j = 0; j < mb; ++j)
 			{
-				calc_main(block_n, block_m, a, dt, dx, dy, A{it}[i][j], A{it+1}[i][j]);
-				read_ghost(block_n, block_m, ghost_edge_len, A{it+1}[i][j], ghost_edges{it}[i][j]);
+				calc_main(block_n, block_m, a, dt, dx, dy, A{it}[i][j], A{it + 1}[i][j]);
+				read_ghost(block_n, block_m, ghost_edge_len, A{it + 1}[i][j], ghost_edges{it}[i][j]);
 			}
 		}
 
@@ -181,6 +185,7 @@ export sub main()
 		print_iter(it);
 		it = it + 2;
 	}
+	print_time();
 
 	for (int i = 0; i < nb; i++)
 	{
@@ -189,6 +194,4 @@ export sub main()
 			print_el(i, j, block_n, block_m, A{it}[i][j]);
 		}
 	}
-
-	print_time();
 }
